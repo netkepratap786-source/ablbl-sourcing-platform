@@ -1,0 +1,155 @@
+"""
+========================================================
+Fibre Market Intelligence Module
+ABLBL Sourcing Intelligence Platform
+========================================================
+"""
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+from utils.header import render_header
+from utils.theme import load_css
+from data.loaders import load_fibre_master
+
+def format_currency(val, unit):
+    """Professional formatting based on unit type."""
+    try:
+        val = float(val)
+        if '₹' in str(unit):
+            return f"₹{val:,.0f} / {str(unit).split('/')[-1]}"
+        elif 'US cents/lb' in str(unit):
+            return f"{val:,.1f} US cents/lb"
+        else:
+            return f"{val:,.2f} {unit}"
+    except:
+        return f"{val} {unit}"
+
+def render_fibre_market():
+    load_css()
+    render_header(
+        page_title="📈 Fibre Market Intelligence",
+        page_description="Enterprise market movement and sourcing decision support"
+    )
+
+    df = load_fibre_master()
+    if df.empty:
+        st.error("Market data unavailable.")
+        return
+
+    df['Date'] = pd.to_datetime(df['Date'])
+
+    # --- 1. SMART FILTERS ---
+    st.markdown("### 🔍 Market Filters")
+    f1, f2, f3, f4, f5 = st.columns(5)
+    
+    fibre = f1.selectbox("Fibre", sorted(df["Fibre"].unique()))
+    f_df = df[df["Fibre"] == fibre]
+    origin = f2.selectbox("Origin", sorted(f_df["Origin"].unique()))
+    fo_df = f_df[f_df["Origin"] == origin]
+    variety = f3.selectbox("Variety", sorted(fo_df["Variety"].unique()))
+    fov_df = fo_df[fo_df["Variety"] == variety]
+    year = f4.selectbox("Year", sorted(fov_df["Year"].unique(), reverse=True))
+    fovy_df = fov_df[fov_df["Year"] == year]
+    month = f5.selectbox("Month", sorted(fovy_df["Month"].unique()))
+
+    m_df = fovy_df[fovy_df["Month"] == month].sort_values('Date')
+    latest = m_df.iloc[-1] if not m_df.empty else fovy_df.sort_values('Date').iloc[-1]
+
+    # --- 2. MARKET OVERVIEW ---
+    st.subheader("📊 Market Overview")
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    
+    k1.metric("Current Market Quote", format_currency(latest['Original Price'], latest['Original Unit']))
+    k2.metric("Standardized Price", format_currency(latest['Standard Price'], latest['Standard Unit']))
+    
+    daily_chg = latest.get('Daily Change %', 0)
+    k3.metric("Daily Change %", f"{daily_chg:.2f}%" if pd.notnull(daily_chg) else "Not Available")
+    
+    yoy_val = latest.get('YoY Change %')
+    k4.metric("YoY Change %", f"{yoy_val:.2f}%" if pd.notnull(yoy_val) else "Not Available")
+    
+    ex_rate = latest.get('Exchange Rate')
+    k5.metric("Exchange Rate", "Not Applicable" if ex_rate == 1 else (f"{ex_rate:.2f}" if pd.notnull(ex_rate) else "Not Available"))
+    
+    if daily_chg > 0.5: direction = "🟢 Rising"
+    elif daily_chg < -0.5: direction = "🔴 Falling"
+    else: direction = "🟡 Stable"
+    k6.metric("Market Direction", direction)
+
+    # --- 3. MARKET QUOTE VS STANDARDIZED PRICE ---
+    st.markdown("---")
+    col_a, col_arrow, col_b = st.columns([1, 0.2, 1])
+    with col_a:
+        st.info(f"**Original Market Quote**\n\n{format_currency(latest['Original Price'], latest['Original Unit'])}")
+    with col_arrow:
+        st.markdown("<br><h2 style='text-align: center;'>→</h2>", unsafe_allow_html=True)
+    with col_b:
+        st.success(f"**Equivalent Standardized Price**\n\n{format_currency(latest['Standard Price'], latest['Standard Unit'])}")
+    st.markdown("---")
+
+    # --- 4. PRICE TREND ---
+    st.subheader(f"📈 {latest['Variety']} Price Trend")
+    chart_df = fov_df.sort_values('Date')
+    fig = px.line(chart_df, x='Date', y='Original Price', markers=True, 
+                  hover_data={'Date': True, 'Original Price': True, 'Daily Change %': True, 'Source': True},
+                  template="plotly_dark")
+    fig.update_traces(line=dict(width=3))
+    fig.update_layout(height=350, margin=dict(l=20, r=20, t=20, b=20))
+    st.plotly_chart(fig, use_container_width=True)
+
+    # --- 5. GLOBAL FIBRE COMPARISON ---
+    st.subheader("🌍 Global Fibre Comparison")
+    comp_mask = (df["Fibre"] == fibre) & (df["Year"] == year) & (df["Month"] == month)
+    comp_data = df[comp_mask].copy()
+    
+    if not comp_data.empty:
+        summary_list = []
+        for (o, v), group in comp_data.groupby(["Origin", "Variety"]):
+            latest_row = group.sort_values('Date').iloc[-1]
+            summary_list.append({
+                "Origin": o, "Variety": v, 
+                "Market Quote": format_currency(latest_row['Original Price'], latest_row['Original Unit']),
+                "Standardized Price": latest_row['Standard Price'],
+                "Currency": latest_row['Currency'], "Source": latest_row['Source']
+            })
+        
+        c_df = pd.DataFrame(summary_list)
+        min_price = c_df['Standardized Price'].min()
+        c_df['Difference vs Lowest'] = ((c_df['Standardized Price'] - min_price) / min_price * 100).round(1).apply(lambda x: f"{x}%")
+        
+        def style_rows(row):
+            if row['Standardized Price'] == min_price: return ['background-color: #2e7d32'] * len(row)
+            if row['Standardized Price'] == c_df['Standardized Price'].max(): return ['background-color: #8b0000'] * len(row)
+            return [''] * len(row)
+        
+        st.dataframe(c_df.style.apply(style_rows, axis=1), use_container_width=True, hide_index=True)
+
+    # --- 6. PROCUREMENT INSIGHT ---
+    st.subheader("💡 Procurement Insight")
+    if not comp_data.empty and len(c_df) > 1:
+        best = c_df.loc[c_df['Standardized Price'].idxmin()]
+        st.markdown(f"""
+        - **Recommended Source:** {best['Origin']} | {best['Variety']}
+        - **Market Quote:** {best['Market Quote']}
+        - **Standardized Price:** {format_currency(best['Standardized Price'], 'Standard')}
+        - **Cost Advantage:** {c_df.loc[c_df['Standardized Price'].idxmax(), 'Difference vs Lowest']} cheaper than highest source.
+        - **Reason:** Lowest standardized price among all available origins for the selected month.
+        """)
+    else:
+        st.write("No comparison available.")
+
+    # --- 7. MARKET INFORMATION ---
+    st.subheader("ℹ️ Market Information")
+    i1, i2, i3, i4 = st.columns(4)
+    i1.metric("Market Type", latest['Market Type'])
+    i2.metric("Currency", latest['Currency'])
+    i3.metric("Source", latest['Source'])
+    i4.metric("Last Updated", latest['Date'].strftime('%d-%b-%Y'))
+
+    # --- 8. MARKET COMMENTARY ---
+    st.subheader("📝 Market Commentary")
+    remarks = latest.get('Remarks')
+    if pd.notnull(remarks) and str(remarks).strip():
+        st.info(remarks)
+    else:
+        st.write("No market commentary available.")

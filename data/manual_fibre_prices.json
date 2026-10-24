@@ -1,0 +1,22 @@
+{
+  "india_cotton": {
+    "flag": "🇮🇳",
+    "country": "India",
+    "price_line": "₹31,800 / Candy",
+    "change_pct": 0.0
+  },
+  "china_cotton": {
+    "flag": "🇨🇳",
+    "country": "China",
+    "price_line": "¥16,225 / MT",
+    "change_pct": 0.25
+  },
+  "australia_wool": {
+    "flag": "🇦🇺",
+    "country": "Australia",
+    "price_line": "AU$18.73 / kg",
+    "change_pct": 0.0
+  },
+  "source": "CAI / Trading Economics",
+  "updated": "10 Aug 2026 09:13 AM"
+}
